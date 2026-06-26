@@ -89,7 +89,7 @@ def forward_request(url, headers, payload, stream=False):
         )
         if resp.status_code != 200:
             body = resp.content.decode('utf-8', errors='replace')
-            logger.warning(f'上游返回 {resp.status_code}: {body[:300]}')
+            logger.warning('上游返回非 200 状态: %s', resp.status_code)
             if stream:
                 return None, f'上游错误 {resp.status_code}: {body}'
             return None, Response(

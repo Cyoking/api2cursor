@@ -7,15 +7,29 @@
 """
 
 import logging
+import time
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 
 import settings
 from config import Config
 from routes import register_routes
+from utils.auth import extract_request_api_key
 
 logger = logging.getLogger(__name__)
+
+
+def _is_data_path(path: str) -> bool:
+    """判断是否为 Cursor/模型供应商访问的数据面路径。"""
+    prefixes = (
+        '/v1/',
+        '/models',
+        '/chat/completions',
+        '/responses',
+        '/messages',
+    )
+    return any(path == p.rstrip('/') or path.startswith(p) for p in prefixes)
 
 
 def create_app():
@@ -48,26 +62,57 @@ def create_app():
     # ─── 全局鉴权中间件 ──────────────────────────
 
     @app.before_request
-    def check_access():
-        """在进入业务路由前校验访问密钥。
+    def start_access_log():
+        """记录请求开始时间，用于输出轻量访问日志。"""
+        g._access_start = time.time()
 
-        当配置了 `ACCESS_API_KEY` 时，除健康检查和管理面板相关路径外，
-        所有请求都必须携带正确的 Bearer Token 或 `x-api-key`。
+    @app.after_request
+    def log_access(response):
+        """输出数据面访问日志，便于排查 Cursor 实际调用的路径。
+
+        日志只记录路径、模型、状态等元信息，不记录 Authorization 或 API Key。
         """
-        if not Config.ACCESS_API_KEY:
+        data_paths = (
+            '/v1/',
+            '/models',
+            '/chat/completions',
+            '/responses',
+            '/messages',
+        )
+        should_log = any(request.path == p.rstrip('/') or request.path.startswith(p) for p in data_paths)
+        if should_log:
+            payload = request.get_json(silent=True) if request.is_json else None
+            model = payload.get('model') if isinstance(payload, dict) else ''
+            stream = payload.get('stream') if isinstance(payload, dict) else ''
+            duration_ms = int((time.time() - getattr(g, '_access_start', time.time())) * 1000)
+            logger.info(
+                '[访问] %s %s status=%s model=%s stream=%s duration_ms=%s ua=%s',
+                request.method,
+                request.path,
+                response.status_code,
+                model or '-',
+                stream if stream != '' else '-',
+                duration_ms,
+                request.headers.get('User-Agent', '-')[:120],
+            )
+        return response
+
+    @app.before_request
+    def check_access():
+        """在进入业务路由前提取数据面用户 key。
+
+        后台 API 使用独立的 ADMIN_API_KEY 在 `routes.admin` 中校验。
+        数据面不再比对本地白名单，只把用户在 Cursor 中填写的 key
+        传给上游 sub2api，由 sub2api 负责额度统计和合法性校验。
+        """
+        if not _is_data_path(request.path):
             return
 
-        # 无需鉴权的路径
-        skip = ('/health', '/admin', '/static/', '/api/admin')
-        if any(request.path == p or request.path.startswith(p) for p in skip):
-            return
-
-        auth = request.headers.get('Authorization', '')
-        token = auth[7:] if auth.startswith('Bearer ') else request.headers.get('x-api-key', '')
-        if token != Config.ACCESS_API_KEY:
-            logger.warning(f'鉴权拒绝: {request.path}')
+        g.client_api_key = extract_request_api_key()
+        if Config.REQUIRE_CLIENT_API_KEY and not g.client_api_key:
+            logger.warning('数据面请求未携带 API Key: %s', request.path)
             return jsonify({
-                'error': {'message': 'API 密钥无效', 'type': 'authentication_error'}
+                'error': {'message': '缺少 API Key', 'type': 'authentication_error'}
             }), 401
 
     # ─── 健康检查 ────────────────────────────────

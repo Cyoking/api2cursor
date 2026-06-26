@@ -12,11 +12,11 @@
 <div id="login">
   <div class="login-card">
     <h1>API 2 Cursor</h1>
-    <p>模型映射管理面板</p>
+    <p>全局模型映射管理面板</p>
     <div class="field">
-      <label>ACCESS_API_KEY</label>
+      <label>ADMIN_API_KEY</label>
       <div class="input-wrap">
-        <input type="password" id="loginKey" placeholder="请输入访问密钥" onkeydown="if(event.key==='Enter')doLogin()">
+        <input type="password" id="loginKey" placeholder="请输入管理员密钥" onkeydown="if(event.key==='Enter')doLogin()">
         <button class="eye" onclick="togglePwd('loginKey')">&#128065;</button>
       </div>
     </div>
@@ -50,10 +50,15 @@
       <div class="field">
         <label>中转站 API Key</label>
         <div class="input-wrap">
-          <input type="password" id="proxyKey" placeholder="sk-xxx 或 Bearer token">
+          <input type="password" id="proxyKey" placeholder="可选兜底 key，正常由用户请求透传">
           <button class="eye" onclick="togglePwd('proxyKey')">&#128065;</button>
         </div>
         <div class="hint" id="envKey"></div>
+        <div class="hint">数据面优先使用 Cursor 请求里的 API Key 作为上游 key。这里仅在请求没有携带 key 时作为兜底。</div>
+      </div>
+      <div class="field">
+        <label>后台管理员密钥</label>
+        <div class="hint" id="envAdminKey"></div>
       </div>
       <div class="field">
         <label>日志模式</label>
@@ -64,7 +69,7 @@
             <option value="verbose">详细日志（写入文件）</option>
           </select>
         </div>
-        <div class="hint">关闭：不输出调试日志；简易日志：仅控制台输出；详细日志：额外写入对话级文件日志，并对流式事件做采样截断。</div>
+        <div class="hint">关闭：不输出调试日志；简易日志：仅控制台输出元信息；详细日志：写入对话级元信息文件。所有模式都不记录请求/响应正文。</div>
       </div>
       <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
     </div>
@@ -131,11 +136,12 @@
       <div class="input-wrap"><input type="text" id="mUrl" placeholder="留空则使用全局中转站地址"></div>
     </div>
     <div class="field">
-      <label>自定义 API Key <span style="color:var(--muted)">（可选，留空使用全局设置）</span></label>
+      <label>自定义 API Key <span style="color:var(--muted)">（可选兜底，通常留空）</span></label>
       <div class="input-wrap">
-        <input type="password" id="mKey" placeholder="留空则使用全局 API Key">
+        <input type="password" id="mKey" placeholder="请求未携带 key 时才会使用">
         <button class="eye" onclick="togglePwd('mKey')">&#128065;</button>
       </div>
+      <div class="hint">员工在 Cursor 中填写的个人 sub2api key 会优先透传到上游，这里不要填员工 key。</div>
     </div>
     <div class="field">
       <label>自定义指令 <span style="color:var(--muted)">（可选）</span></label>

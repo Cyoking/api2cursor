@@ -582,16 +582,14 @@ _EPHEMERAL = {'type': 'ephemeral'}
 
 
 def optimize_cache_control(request: JsonDict) -> None:
-    """为 Anthropic Messages 请求启用顶层自动 prompt caching。
+    """清理 Anthropic Messages 请求中的缓存控制字段。
 
-    2026 版 Claude API 已支持在请求顶层使用 `cache_control` 开启自动缓存，
-    由上游自动把断点放到最后一个可缓存块并随多轮对话前移。相比手动在嵌套
-    content blocks 上打断点，这种方式对 Anthropic 兼容中转站更稳定，也更接近
-    `/v1/responses` 通过顶层字段启用缓存的思路。
+    部分 Anthropic 兼容中转站不接受 `cache_control`，会返回
+    "Extra inputs are not permitted"。这里默认不主动注入缓存控制字段，
+    保持请求体尽量贴近基础 Messages API。
     """
     _normalize_message_contents(request)
     _clear_all_cache_controls(request)
-    request['cache_control'] = dict(_EPHEMERAL)
 
 
 def _normalize_message_contents(request: JsonDict) -> None:

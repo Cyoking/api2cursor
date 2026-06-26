@@ -65,11 +65,11 @@ bp = Blueprint('responses', __name__)
 
 
 def _dbg(message: str) -> None:
-    """仅在调试模式下输出详细日志。"""
-    if settings.get_debug_mode() in ('simple', 'verbose'):
-        logger.info('[响应生成调试] %s', message)
+    """隐私模式下不输出请求或响应正文。"""
+    return
 
 
+@bp.route('/responses', methods=['POST'])
 @bp.route('/v1/responses', methods=['POST'])
 def responses_endpoint():
     """处理 Responses 请求并按模型映射分发。"""

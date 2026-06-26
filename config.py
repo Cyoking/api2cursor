@@ -12,14 +12,18 @@ class Config:
 
     # 上游 API 地址
     PROXY_TARGET_URL = os.getenv('PROXY_TARGET_URL', 'https://api.anthropic.com')
-    # 上游 API 密钥
+    # 上游 API 密钥。新模式下仅作为兜底值；数据面会优先透传用户请求中的 key。
     PROXY_API_KEY = os.getenv('PROXY_API_KEY', '')
     # 服务监听端口
     PROXY_PORT = int(os.getenv('PROXY_PORT', '3029'))
     # 请求超时时间（秒）
     API_TIMEOUT = int(os.getenv('API_TIMEOUT', '300'))
-    # 访问鉴权密钥，留空则不启用鉴权
+    # 后台管理员密钥。兼容旧配置：未设置 ADMIN_API_KEY 时回退 ACCESS_API_KEY。
+    ADMIN_API_KEY = os.getenv('ADMIN_API_KEY') or os.getenv('ACCESS_API_KEY', '')
+    # 旧版访问鉴权密钥，仅保留给历史配置读取；数据面不再用它做统一鉴权。
     ACCESS_API_KEY = os.getenv('ACCESS_API_KEY', '')
+    # 数据面是否要求请求携带 key。默认要求携带，但不在本服务校验合法性，由上游 sub2api 判断。
+    REQUIRE_CLIENT_API_KEY = os.getenv('REQUIRE_CLIENT_API_KEY', 'true').strip().lower() not in ('0', 'false', 'no', 'off')
 
     # 调试模式分级：
     # - off: 关闭调试

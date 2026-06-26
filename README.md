@@ -68,10 +68,12 @@ docker compose up -d
 | 变量 | 说明 | 默认值 |
 |---|---|---|
 | `PROXY_TARGET_URL` | 上游中转站地址 | `https://api.anthropic.com` |
-| `PROXY_API_KEY` | 上游 API 密钥 | |
+| `PROXY_API_KEY` | 上游 API 密钥兜底值；数据面优先使用用户请求中的 key | |
 | `PROXY_PORT` | 服务监听端口 | `3029` |
 | `API_TIMEOUT` | 请求超时（秒） | `300` |
-| `ACCESS_API_KEY` | 访问鉴权密钥，留空不启用 | |
+| `ADMIN_API_KEY` | 后台管理密钥，保护模型映射管理接口 | |
+| `ACCESS_API_KEY` | 旧版后台管理密钥兼容项；未设置 `ADMIN_API_KEY` 时生效 | |
+| `REQUIRE_CLIENT_API_KEY` | 数据面是否要求请求携带 API Key；只检查是否存在，不校验合法性 | `true` |
 | `DEBUG` | 兼容旧版调试开关，开启后等价于 `DEBUG_MODE=simple` | `false` |
 | `DEBUG_MODE` | 调试模式：`off` / `simple` / `verbose` | `off` |
 
@@ -82,7 +84,7 @@ docker compose up -d
 - **Cursor 模型名** — 在 Cursor 自定义模型中填入的名称
 - **上游模型名** — 发送到中转站的实际模型名
 - **后端类型** — `openai` (CC 格式) / `anthropic` (Messages 格式) / `responses` (Responses 格式) / `gemini` (Gemini Contents 格式) / `auto` (自动检测)
-- **自定义地址/密钥** — 可选，覆盖全局设置，实现分流到不同中转站
+- **自定义地址/密钥** — 地址可选覆盖全局设置；密钥只作为兜底，正常使用用户请求里的个人 sub2api key
 - **日志模式** — 可在管理面板全局设置中切换 `off` / `simple` / `verbose`
 
 **示例**：在 Cursor 中添加 `claude-sonnet-4-5-20250929`，映射到上游 `gpt-5.3-codex`，后端选 `openai`。Cursor 会用 CC 格式发送请求，代理直接转发到中转站的 `/v1/chat/completions`。
@@ -96,8 +98,8 @@ docker compose up -d
 项目支持三档调试模式，可通过环境变量 `DEBUG_MODE` 或管理面板全局设置切换：
 
 - `off` — 关闭调试日志
-- `simple` — 仅输出控制台调试日志，不写文件
-- `verbose` — 输出控制台调试日志，并写入详细的对话级文件日志
+- `simple` — 仅输出控制台元信息日志，不写文件，不记录请求/响应正文
+- `verbose` — 写入对话级元信息文件日志，不记录请求/响应正文
 
 详细日志会写入：
 
@@ -106,17 +108,19 @@ data/conversations/YYYY-MM-DD/{conversation_id}.json
 ```
 
 特性：
-- 同一段多轮对话聚合到同一个文件
-- 自动记录 client request、upstream request/response、client response、错误信息
-- 流式事件只保留前 12 条和后 12 条，中间部分折叠计数，避免文件膨胀
-- 流式 `client_response` 只记录 summary，不重复保存完整事件数组
+- 每次请求生成独立日志 ID，不基于 prompt 内容派生会话 ID
+- 只记录模型、后端、字段名、数组计数、事件计数、usage 和错误状态等元信息
+- 不记录用户 prompt、上下文文件片段、工具参数、上游请求体、上游响应体或 SSE chunk 内容
+- 请求头只保留少量安全字段；`Authorization`、`x-api-key` 等密钥不会写入日志
 
 ### 在 Cursor 中配置
 
 1. 打开 Cursor 设置 → Models
 2. 添加自定义模型，名称填映射中配置的 Cursor 模型名
 3. Override OpenAI Base URL 填 `http://localhost:3029`
-4. API Key 填 `ACCESS_API_KEY` 的值（未配置则随意填）
+4. API Key 填用户自己的 sub2api key。代理会把这个 key 原样透传给上游，用于 sub2api 的额度统计和权限控制。
+
+后台管理面板使用 `ADMIN_API_KEY` 登录，只负责维护全局模型映射。员工的 sub2api key 不需要导入到本项目，也不会写入本项目配置。
 
 ## 项目结构
 

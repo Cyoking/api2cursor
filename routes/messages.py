@@ -13,7 +13,12 @@ from flask import Blueprint, request, jsonify
 
 import settings
 from config import Config
-from routes.common import apply_body_modifications, apply_header_modifications, inject_instructions_anthropic
+from routes.common import (
+    apply_body_modifications,
+    apply_header_modifications,
+    get_client_api_key,
+    inject_instructions_anthropic,
+)
 from utils.http import build_anthropic_headers, forward_request, sse_response
 from utils.request_logger import (
     append_client_event,
@@ -32,6 +37,7 @@ logger = logging.getLogger(__name__)
 bp = Blueprint('messages', __name__)
 
 
+@bp.route('/messages', methods=['POST'])
 @bp.route('/v1/messages', methods=['POST'])
 def messages_passthrough():
     """透传 Anthropic Messages 请求，并在必要时补齐 thinking 兼容层。"""
@@ -42,7 +48,7 @@ def messages_passthrough():
 
     logger.info(f'[透传] model={model} 流式={is_stream}')
 
-    mapping = settings.resolve_model(model)
+    mapping = settings.resolve_model(model, request_api_key=get_client_api_key())
     url_base = mapping['target_url']
     api_key = mapping['api_key']
     custom_instructions = mapping.get('custom_instructions', '')
@@ -91,8 +97,8 @@ def messages_passthrough():
             )
             if resp.status_code != 200:
                 body = resp.content.decode('utf-8', errors='replace')
-                logger.warning(f'上游返回 {resp.status_code}: {body[:300]}')
-                attach_error(turn, {'stage': 'upstream_status', 'status_code': resp.status_code, 'message': body})
+                logger.warning('上游返回非 200 状态: %s', resp.status_code)
+                attach_error(turn, {'stage': 'upstream_status', 'status_code': resp.status_code})
                 set_stream_summary(turn, {'status': 'error'})
                 finalize_turn(turn)
                 yield f'data: {json.dumps({"error": {"message": body, "type": "upstream_error"}})}\n\n'

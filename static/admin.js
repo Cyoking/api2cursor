@@ -68,7 +68,8 @@ async function loadDashboard() {
     document.getElementById('proxyKey').value = s.proxy_api_key || '';
     document.getElementById('debugMode').value = s.debug_mode || 'off';
     document.getElementById('envUrl').textContent = s.env_target_url ? '环境变量: ' + s.env_target_url : '';
-    document.getElementById('envKey').textContent = s.env_api_key ? '环境变量: (已配置)' : '环境变量: (未设置)';
+    document.getElementById('envKey').textContent = s.env_api_key ? '环境变量 PROXY_API_KEY: (已配置兜底 key)' : '环境变量 PROXY_API_KEY: (未设置)';
+    document.getElementById('envAdminKey').textContent = s.env_admin_key ? '环境变量 ADMIN_API_KEY: (已配置)' : '环境变量 ADMIN_API_KEY: (未设置，旧 ACCESS_API_KEY 可兼容)';
     await loadMappings();
     checkHealth();
     loadStats();

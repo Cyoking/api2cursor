@@ -80,9 +80,8 @@ bp = Blueprint('chat', __name__)
 
 
 def _dbg(message: str) -> None:
-    """仅在调试模式下输出详细日志。"""
-    if settings.get_debug_mode() in ('simple', 'verbose'):
-        logger.info('[聊天补全调试] %s', message)
+    """隐私模式下不输出请求或响应正文。"""
+    return
 
 
 def _extract_responses_usage(event_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -104,6 +103,7 @@ def _extract_responses_usage(event_data: dict[str, Any]) -> dict[str, Any] | Non
     return None
 
 
+@bp.route('/chat/completions', methods=['POST'])
 @bp.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
     """处理聊天补全请求并按模型映射分发到不同后端。"""
@@ -126,7 +126,6 @@ def chat_completions():
     )
 
     log_route_context('聊天补全', ctx, extra=f'消息数={message_count}')
-    _log_messages(payload)
 
     if ctx.backend != 'responses':
         payload['messages'] = thinking_cache.inject(payload.get('messages', []))
@@ -713,22 +712,5 @@ def _finalize_chat_response(
 
 
 def _log_messages(payload: dict[str, Any]) -> None:
-    """记录消息摘要，方便排查请求形态是否符合预期。"""
-    for index, message in enumerate(payload.get('messages', [])):
-        role = message.get('role', '?')
-        content = message.get('content')
-        extra = ''
-
-        if 'tool_calls' in message:
-            extra += f' 工具调用数={len(message["tool_calls"])}'
-        if message.get('tool_call_id'):
-            extra += f' 工具调用ID={message["tool_call_id"]}'
-
-        if isinstance(content, list):
-            content_info = f'列表[{len(content)}]'
-        elif isinstance(content, str):
-            content_info = f'文本[{len(content)}]'
-        else:
-            content_info = type(content).__name__
-
-        logger.info('  消息[%s] 角色=%s 内容=%s%s', index, role, content_info, extra)
+    """隐私模式下不记录消息明细。"""
+    return

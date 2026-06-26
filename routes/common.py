@@ -12,8 +12,11 @@ import json
 import logging
 from typing import Any
 
+from flask import g
+
 import settings
 from utils.http import build_anthropic_headers, build_gemini_headers, build_openai_headers
+from utils.auth import extract_request_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ class RouteContext:
 
 def build_route_context(client_model: str, is_stream: bool) -> RouteContext:
     """解析模型映射，得到当前请求的统一路由上下文。"""
-    mapping = settings.resolve_model(client_model)
+    mapping = settings.resolve_model(client_model, request_api_key=get_client_api_key())
     return RouteContext(
         client_model=client_model,
         upstream_model=mapping['upstream_model'],
@@ -54,6 +57,11 @@ def build_route_context(client_model: str, is_stream: bool) -> RouteContext:
         body_modifications=mapping.get('body_modifications', {}),
         header_modifications=mapping.get('header_modifications', {}),
     )
+
+
+def get_client_api_key() -> str:
+    """获取当前数据面请求携带的用户 API key。"""
+    return getattr(g, 'client_api_key', '') or extract_request_api_key()
 
 
 def build_openai_target(ctx: RouteContext) -> tuple[str, dict[str, str]]:

@@ -40,6 +40,7 @@ def static_files(filename):
 # ─── 模型列表 ─────────────────────────────────────
 
 
+@bp.route('/models', methods=['GET'])
 @bp.route('/v1/models', methods=['GET'])
 def list_models():
     """返回当前配置的模型列表，供 Cursor 拉取可用模型。"""
@@ -59,6 +60,22 @@ def list_models():
     return jsonify({'object': 'list', 'data': models})
 
 
+@bp.route('/models/<path:name>', methods=['GET'])
+@bp.route('/v1/models/<path:name>', methods=['GET'])
+def get_model(name):
+    """返回单个模型详情，兼容 OpenAI 的模型查询接口。"""
+    mappings = settings.get().get('model_mappings', {})
+    if name not in mappings:
+        return jsonify({'error': {'message': '未找到模型', 'type': 'not_found'}}), 404
+
+    info = mappings[name]
+    return jsonify({
+        'id': name,
+        'object': 'model',
+        'owned_by': info.get('backend', 'custom'),
+    })
+
+
 # ─── 登录验证 ─────────────────────────────────────
 
 
@@ -66,9 +83,9 @@ def list_models():
 def admin_login():
     """校验管理面板登录密钥，并返回是否允许进入后台。"""
     data = request.get_json(force=True)
-    if not Config.ACCESS_API_KEY:
+    if not Config.ADMIN_API_KEY:
         return jsonify({'ok': True, 'message': '未配置鉴权'})
-    if data.get('key', '') == Config.ACCESS_API_KEY:
+    if data.get('key', '') == Config.ADMIN_API_KEY:
         return jsonify({'ok': True})
     return jsonify({'ok': False, 'message': '密钥错误'}), 401
 
@@ -89,6 +106,8 @@ def get_settings():
         'debug_mode': s.get('debug_mode', '') or Config.DEBUG_MODE,
         'env_target_url': Config.PROXY_TARGET_URL,
         'env_api_key': '***' if Config.PROXY_API_KEY else '',
+        'env_admin_key': '***' if Config.ADMIN_API_KEY else '',
+        'require_client_api_key': Config.REQUIRE_CLIENT_API_KEY,
     })
 
 
@@ -207,11 +226,11 @@ def get_stats():
 
 def _check_auth():
     """Admin API 鉴权，返回 None 表示通过"""
-    if not Config.ACCESS_API_KEY:
+    if not Config.ADMIN_API_KEY:
         return None
     auth = request.headers.get('Authorization', '')
     token = auth[7:] if auth.startswith('Bearer ') else request.headers.get('x-api-key', '')
-    if token != Config.ACCESS_API_KEY:
+    if token != Config.ADMIN_API_KEY:
         return jsonify({'error': '未授权'}), 401
     return None
 

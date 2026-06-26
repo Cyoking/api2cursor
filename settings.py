@@ -84,11 +84,17 @@ def get_debug_mode():
     return mode if mode in ('off', 'simple', 'verbose') else Config.DEBUG_MODE
 
 
-def resolve_model(model_name):
-    """解析模型映射并返回完整的上游路由信息。"""
+def resolve_model(model_name, request_api_key=''):
+    """解析模型映射并返回完整的上游路由信息。
+
+    `request_api_key` 是用户在 Cursor 中填写的个人 sub2api key。
+    新模式下它优先于模型/全局配置中的 api_key，确保上游能按个人 key
+    做额度统计和权限控制。
+    """
     settings = get()
     mappings = settings.get('model_mappings', {})
     base_url, base_key = get_url(), get_key()
+    request_api_key = request_api_key or ''
 
     if model_name in mappings:
         m = mappings[model_name]
@@ -99,7 +105,7 @@ def resolve_model(model_name):
             'upstream_model': m.get('upstream_model') or model_name,
             'backend': backend,
             'target_url': m.get('target_url') or base_url,
-            'api_key': m.get('api_key') or base_key,
+            'api_key': request_api_key or m.get('api_key') or base_key,
             'custom_instructions': m.get('custom_instructions') or '',
             'instructions_position': m.get('instructions_position') or 'prepend',
             'body_modifications': m.get('body_modifications') or {},
@@ -110,7 +116,7 @@ def resolve_model(model_name):
         'upstream_model': model_name,
         'backend': _auto_detect(model_name),
         'target_url': base_url,
-        'api_key': base_key,
+        'api_key': request_api_key or base_key,
         'custom_instructions': '',
         'instructions_position': 'prepend',
         'body_modifications': {},

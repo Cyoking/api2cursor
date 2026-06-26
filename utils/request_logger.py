@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import logging
 import os
@@ -16,7 +15,6 @@ import threading
 from datetime import datetime
 from typing import Any
 
-from config import Config
 from settings import DATA_DIR
 import settings
 from utils.http import gen_id
@@ -60,8 +58,8 @@ def start_turn(
         'upstream_model': upstream_model,
         'started_at': now,
         'updated_at': now,
-        'request_headers': sanitize_headers(request_headers or {}),
-        'client_request': deep_copy_jsonable(client_request),
+        'request_headers': summarize_headers(request_headers or {}),
+        'client_request': summarize_payload(client_request),
         'metadata': deep_copy_jsonable(metadata or {}),
         'upstream_request': None,
         'upstream_response': None,
@@ -80,56 +78,53 @@ def start_turn(
 
 
 def get_conversation_id(*, route: str, payload: dict[str, Any]) -> str:
-    """尽量为同一段多轮对话生成稳定的会话 ID。"""
-    explicit = _pick_explicit_conversation_id(payload)
-    if explicit:
-        return _safe_id(explicit)
+    """生成会话日志 ID。
 
-    seed = _conversation_seed(route, payload)
-    digest = hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]
-    return f'conv_{digest}'
+    隐私要求下不再根据请求正文生成稳定 ID，避免把 prompt 内容写入或派生进日志。
+    """
+    return gen_id('conv_')
 
 
 def attach_upstream_request(turn: dict[str, Any] | None, payload: dict[str, Any], headers: dict[str, Any] | None = None) -> None:
-    """记录最终发往上游的请求。"""
+    """记录最终发往上游的请求摘要，不保存请求正文。"""
     if turn is None:
         return
     turn['upstream_request'] = {
-        'headers': sanitize_headers(headers or {}),
-        'body': deep_copy_jsonable(payload),
+        'headers': summarize_headers(headers or {}),
+        'body': summarize_payload(payload),
     }
     _touch(turn)
 
 
 def attach_upstream_response(turn: dict[str, Any] | None, response_data: Any) -> None:
-    """记录上游完整非流式响应。"""
+    """记录上游非流式响应摘要，不保存响应正文。"""
     if turn is None:
         return
-    turn['upstream_response'] = deep_copy_jsonable(response_data)
+    turn['upstream_response'] = summarize_payload(response_data)
     _touch(turn)
 
 
 def attach_client_response(turn: dict[str, Any] | None, response_data: Any) -> None:
-    """记录最终返回给客户端的完整响应。"""
+    """记录最终返回给客户端的响应摘要，不保存响应正文。"""
     if turn is None:
         return
-    turn['client_response'] = deep_copy_jsonable(response_data)
+    turn['client_response'] = summarize_payload(response_data)
     _touch(turn)
 
 
 def append_upstream_event(turn: dict[str, Any] | None, event: Any) -> None:
-    """记录一条上游流式事件，超限时截断保留头尾。"""
+    """记录一条上游流式事件摘要，不保存 chunk 内容。"""
     if turn is None:
         return
-    _append_stream_event(turn['stream_trace'], 'upstream', deep_copy_jsonable(event))
+    _append_stream_event(turn['stream_trace'], 'upstream', summarize_payload(event))
     _touch(turn)
 
 
 def append_client_event(turn: dict[str, Any] | None, event: Any) -> None:
-    """记录一条返回给客户端的流式事件，超限时截断保留头尾。"""
+    """记录一条返回给客户端的流式事件摘要，不保存 chunk 内容。"""
     if turn is None:
         return
-    _append_stream_event(turn['stream_trace'], 'client', deep_copy_jsonable(event))
+    _append_stream_event(turn['stream_trace'], 'client', summarize_payload(event))
     _touch(turn)
 
 
@@ -137,15 +132,15 @@ def set_stream_summary(turn: dict[str, Any] | None, summary: dict[str, Any]) -> 
     """记录流式摘要，例如累计文本、事件数、usage 等。"""
     if turn is None:
         return
-    turn['stream_trace']['summary'] = deep_copy_jsonable(summary)
+    turn['stream_trace']['summary'] = sanitize_summary(summary)
     _touch(turn)
 
 
 def attach_error(turn: dict[str, Any] | None, error: Any) -> None:
-    """记录错误信息。"""
+    """记录错误摘要，不保存可能包含请求或响应正文的详细内容。"""
     if turn is None:
         return
-    turn['error'] = deep_copy_jsonable(error)
+    turn['error'] = sanitize_summary(error)
     _touch(turn)
 
 
@@ -186,6 +181,109 @@ def sanitize_headers(headers: dict[str, Any]) -> dict[str, Any]:
         else:
             sanitized[key] = value
     return sanitized
+
+
+def summarize_headers(headers: dict[str, Any]) -> dict[str, Any]:
+    """只保留排障需要的安全请求头摘要。"""
+    sanitized = sanitize_headers(headers)
+    allowed = {
+        'accept',
+        'content-type',
+        'user-agent',
+        'x-request-id',
+        'cf-connecting-ip',
+        'cf-ray',
+    }
+    result: dict[str, Any] = {}
+    for key, value in sanitized.items():
+        if str(key).lower() in allowed:
+            result[key] = value
+    return result
+
+
+def summarize_payload(value: Any) -> Any:
+    """生成不含正文内容的结构摘要。
+
+    只记录字段、模型、流式标记、数组长度、usage 等排障元信息。
+    """
+    if isinstance(value, dict):
+        summary: dict[str, Any] = {'fields': sorted(str(k) for k in value.keys())}
+        for key in ('id', 'model', 'object', 'type', 'role', 'status', 'finish_reason', 'stream'):
+            item = value.get(key)
+            if isinstance(item, (str, int, float, bool)) or item is None:
+                summary[key] = item
+
+        if isinstance(value.get('messages'), list):
+            summary['message_count'] = len(value['messages'])
+        if isinstance(value.get('input'), list):
+            summary['input_item_count'] = len(value['input'])
+        elif 'input' in value:
+            summary['input_type'] = type(value.get('input')).__name__
+        if isinstance(value.get('tools'), list):
+            summary['tool_count'] = len(value['tools'])
+        if isinstance(value.get('choices'), list):
+            summary['choice_count'] = len(value['choices'])
+            finish_reasons = [
+                choice.get('finish_reason')
+                for choice in value['choices']
+                if isinstance(choice, dict) and choice.get('finish_reason') is not None
+            ]
+            if finish_reasons:
+                summary['finish_reasons'] = finish_reasons
+        if isinstance(value.get('output'), list):
+            summary['output_item_count'] = len(value['output'])
+        if isinstance(value.get('content'), list):
+            summary['content_block_count'] = len(value['content'])
+        if isinstance(value.get('usage'), dict):
+            summary['usage'] = sanitize_summary(value['usage'])
+        return summary
+
+    if isinstance(value, list):
+        return {'type': 'list', 'count': len(value)}
+
+    if isinstance(value, (str, bytes, bytearray)):
+        return {'type': type(value).__name__}
+
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+
+    return {'type': type(value).__name__}
+
+
+def sanitize_summary(value: Any) -> Any:
+    """递归清理摘要，删除可能承载正文的字段。"""
+    sensitive_keys = {
+        'content',
+        'text',
+        'input',
+        'output',
+        'message',
+        'messages',
+        'delta',
+        'arguments',
+        'thinking',
+        'reasoning',
+        'reasoning_content',
+        'reasoningContent',
+        'raw',
+        'body',
+        'prompt',
+        'instructions',
+        'system',
+    }
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if str(key) in sensitive_keys:
+                result[str(key)] = '[redacted]'
+            else:
+                result[str(key)] = sanitize_summary(item)
+        return result
+    if isinstance(value, list):
+        return [sanitize_summary(item) for item in value]
+    if isinstance(value, (str, bytes, bytearray)):
+        return '[redacted]'
+    return deep_copy_jsonable(value)
 
 
 def deep_copy_jsonable(value: Any) -> Any:
@@ -298,165 +396,28 @@ def _pick_explicit_conversation_id(payload: dict[str, Any]) -> str:
 
 
 def _conversation_seed(route: str, payload: dict[str, Any]) -> str:
-    """生成稳定的对话种子。
-
-    关键原则：不能直接把整段历史消息都放进 seed，
-    否则每一轮历史增长都会导致 conversation_id 改变，最终每次请求都新建文件。
-
-    这里改为基于“对话根消息”生成种子：
-    - chat/messages: 第一条 user + 第一条 assistant（没有 assistant 时退化为第一条 user）
-    - responses: input 中的第一条 user + 第一条 assistant（没有 assistant 时退化为第一条 user）
-    """
-    if route == 'chat':
-        return 'chat|' + _root_seed_from_messages(payload.get('messages', []))
-
-    if route == 'responses':
-        return 'responses|' + _root_seed_from_responses_input(payload)
-
-    if route == 'messages':
-        system = payload.get('system', '')
-        root = _root_seed_from_messages(payload.get('messages', []))
-        return 'messages|' + str(system) + '|' + root
-
-    return route + '|' + _pick_explicit_conversation_id(payload)
+    """隐私模式下不根据请求正文生成种子。"""
+    return route
 
 
 def _root_seed_from_messages(messages: Any) -> str:
-    if not isinstance(messages, list):
-        return ''
-
-    first_user = None
-    first_assistant = None
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        role = msg.get('role', '')
-        if role in ('system', 'developer'):
-            continue
-        normalized = {
-            'role': role,
-            'content': _normalize_content(msg.get('content')),
-            'tool_call_id': msg.get('tool_call_id', ''),
-            'tool_calls': [
-                {
-                    'id': tc.get('id', ''),
-                    'name': (tc.get('function') or {}).get('name', ''),
-                }
-                for tc in msg.get('tool_calls', [])
-                if isinstance(tc, dict)
-            ],
-        }
-        if role == 'user' and first_user is None:
-            first_user = normalized
-        elif role == 'assistant' and first_assistant is None:
-            first_assistant = normalized
-        if first_user is not None and first_assistant is not None:
-            break
-
-    seed_parts = []
-    if first_user is not None:
-        seed_parts.append(first_user)
-    if first_assistant is not None:
-        seed_parts.append(first_assistant)
-    return json.dumps(seed_parts, ensure_ascii=False, separators=(',', ':'))
+    return ''
 
 
 def _root_seed_from_responses_input(payload: dict[str, Any]) -> str:
-    instructions = payload.get('instructions') or ''
-    input_data = payload.get('input', [])
-
-    if isinstance(input_data, str):
-        seed_input = input_data
-    elif isinstance(input_data, list):
-        seed_input = _root_seed_from_responses_items(input_data)
-    else:
-        seed_input = json.dumps(input_data, ensure_ascii=False, default=str)
-
-    return instructions + '|' + seed_input
+    return ''
 
 
 def _root_seed_from_responses_items(items: list[Any]) -> str:
-    first_user = None
-    first_assistant = None
-
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        item_type = item.get('type', '')
-        role = item.get('role', '')
-
-        if item_type in ('message', 'input_text', 'output_text'):
-            normalized = {
-                'type': item_type,
-                'role': role,
-                'content': _normalize_content(
-                    item.get('content')
-                    or item.get('text')
-                    or item.get('input_text')
-                    or item.get('output_text')
-                    or ''
-                ),
-            }
-            if role == 'user' and first_user is None:
-                first_user = normalized
-            elif role == 'assistant' and first_assistant is None:
-                first_assistant = normalized
-
-        elif item_type == 'function_call' and first_assistant is None:
-            first_assistant = {
-                'type': 'function_call',
-                'name': item.get('name', ''),
-                'call_id': item.get('call_id', ''),
-            }
-
-        if first_user is not None and first_assistant is not None:
-            break
-
-    seed_parts = []
-    if first_user is not None:
-        seed_parts.append(first_user)
-    if first_assistant is not None:
-        seed_parts.append(first_assistant)
-    return json.dumps(seed_parts, ensure_ascii=False, separators=(',', ':'))
+    return ''
 
 
 def _normalize_messages_seed(messages: Any) -> str:
-    if not isinstance(messages, list):
-        return ''
-    normalized: list[dict[str, Any]] = []
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        normalized.append({
-            'role': msg.get('role', ''),
-            'content': _normalize_content(msg.get('content')),
-            'tool_call_id': msg.get('tool_call_id', ''),
-            'tool_calls': [
-                {
-                    'id': tc.get('id', ''),
-                    'name': (tc.get('function') or {}).get('name', ''),
-                }
-                for tc in msg.get('tool_calls', [])
-                if isinstance(tc, dict)
-            ],
-        })
-    return json.dumps(normalized, ensure_ascii=False, separators=(',', ':'))
+    return ''
 
 
 def _normalize_content(content: Any) -> Any:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        result = []
-        for item in content:
-            if isinstance(item, dict):
-                result.append(item)
-            else:
-                result.append(str(item))
-        return result
-    if content is None:
-        return ''
-    return str(content)
+    return '[redacted]'
 
 
 def _safe_id(raw: str) -> str:
